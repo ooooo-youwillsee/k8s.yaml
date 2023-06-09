@@ -1,0 +1,129 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: cicd-demo-backend
+spec:
+  description: cicd-demo-backend
+  params:
+  - name: repo-url
+    type: string
+    description: The git repository URL to clone from.
+  - name: branch-name
+    type: string
+    description: The git branch to clone.
+  - name: project-dir
+    type: string
+    description: The relative path to project
+  - name: gradle-tasks
+    type: string
+  - name: docker-file
+    type: string
+  - name: docker-context
+    type: string
+  - name: docker-image
+    type: string
+  - name: kubectl-args
+    type: string
+  workspaces:
+  - name: shared-data
+    description: The path to git clone
+  - name: gitlab-ssh
+    description: gitlab .ssh config 
+  - name: harbor-auth
+    description: harbor .docker config
+  - name: kubeconfig
+    description: kubeconfig
+  tasks:
+  - name: git-clone
+    taskRef:
+      name: git-clone
+    workspaces:
+    - name: output
+      workspace: shared-data
+    - name: ssh-directory
+      workspace: gitlab-ssh      
+    params:
+    - name: url
+      value: $(params.repo-url)
+    - name: revision
+      value: $(params.branch-name)
+  - name: gradle
+    runAfter: ["git-clone"] 
+    taskRef: 
+      name: gradle
+    workspaces:
+    - name: source
+      workspace: shared-data
+    params:
+    - name: PROJECT_DIR
+      value: $(params.project-dir)
+    - name: TASKS
+      value: $(params.gradle-tasks)
+  - name: build-image
+    runAfter: ["gradle"]
+    taskRef:
+      name: kaniko
+    workspaces:
+    - name: source
+      workspace: shared-data
+    - name: dockerconfig
+      workspace: harbor-auth
+    params:
+    - name: EXTRA_ARGS
+      value:
+       - --skip-tls-verify
+    - name: DOCKERFILE
+      value: $(params.docker-file)
+    - name: CONTEXT
+      value: $(params.docker-context)
+    - name: IMAGE
+      value: $(params.docker-image)
+  - name: kubectl
+    runAfter: ["build-image"]
+    taskRef:
+      name: kubernetes-actions
+    workspaces:
+      - name: kubeconfig-dir
+        workspace: kubeconfig
+    params:
+      - name: args
+        value: 
+          - ${params.kubectl-args}
+---
+apiVersion: tekton.dev/v1beta1
+kind: PipelineRun
+metadata:
+  name: cicd-demo-backend-run
+spec:
+  pipelineRef:
+    name: cicd-demo-backend
+  workspaces:
+  - name: shared-data
+    persistentVolumeClaim:
+      claimName: pvc-gitlab
+  - name: gitlab-ssh
+    secret:
+      secretName: gitlab-ssh-secret
+  - name: harbor-auth
+    secret:
+      secretName: harbor-auth
+  - name: kubeconfig
+    configMap:
+        name: kubeconfig
+  params:
+  - name: repo-url
+    value: xxxx
+  - name: branch-name
+    value: development
+  - name: project-dir
+    value: .
+  - name: gradle-tasks
+    value: bootJar -p demo-backend
+  - name: docker-file
+    value: demo-backend/Dockerfile
+  - name: docker-context
+    value: demo-backend
+  - name: docker-image
+    value: docker.io/youwillsee/demo-backend:development
+  - name: kubectl-args
+    value: rollout restart deploy demo-backend
